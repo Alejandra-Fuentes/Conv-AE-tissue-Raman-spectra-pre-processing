@@ -1,0 +1,241 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Jan 31 17:07:28 2025
+
+@author: Alejandra
+"""
+
+import tensorflow as tf
+from tensorflow import keras
+from keras.models import Sequential
+from keras.models import Model
+from keras.layers import Dense, Dropout, Flatten, Normalization, Conv1D, InputLayer, BatchNormalization
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from numpy import mean,std
+from sklearn.metrics import confusion_matrix
+from keras.utils.vis_utils import plot_model
+from sklearn.model_selection import KFold
+
+
+#Raw and corresponding clean data in excel files
+#Two sets of data: Cell lines and mice in separate files
+celldata = pd.read_excel(r'C:\Users\Alejandra\OneDrive - UBC\Documents\Architecture tuning\AEpaperRound2Sept2025\RAWcellspectra4920w582wn.xlsx',header=None,sheet_name='RawCRaddedzscore')
+celly_data = pd.read_excel(r'C:\Users\Alejandra\OneDrive - UBC\Documents\Architecture tuning\AEpaperRound2Sept2025\RAWcellspectra4920w582wn.xlsx',header=None,sheet_name='BLremovedzscore')  
+
+lungdata = pd.read_csv(r'C:\Users\Alejandra\OneDrive - UBC\Documents\Architecture tuning\AEpaperRound2Sept2025\MouseLungh460RawspectCRadded.csv',header=None)
+lungy_data = pd.read_csv(r'C:\Users\Alejandra\OneDrive - UBC\Documents\Architecture tuning\AEpaperRound2Sept2025\MouseLungh460BRAUCzscore.csv',header=None)  
+
+
+# Convert the 2D mouse tissue spectra matrix  to 3D array so that input is acceptable to the CNN. 
+#From (num of spectra) x (num of points) matrix to a (num of spectra) x (num of points) x (1)
+lungdata = np.expand_dims(lungdata, -1)    
+lungy_data = np.expand_dims(lungy_data, -1) 
+
+
+#############Assigned individual mice to one of 5-fold test sets #########################
+# For a given fold, selected mice (~ 2-3) are held out for testing the model, which is trained with the remaining data
+
+
+#fold 1: F4 and F14 mice 
+a=0
+b=1031
+
+RawTestMouse_0=lungdata[a:b]
+y_TestMouse_0=lungy_data[a:b]
+
+RemainLungdata_0=np.delete(lungdata,np.arange(a,b), axis=0)
+y_RemainLungdata_0=np.delete(lungy_data,np.arange(a,b), axis=0)
+
+#fold 2: F17 and F19 mice
+c=2025
+
+RawTestMouse_1=lungdata[b:c]
+y_TestMouse_1=lungy_data[b:c]
+
+RemainLungdata_1=np.delete(lungdata,np.arange(b,c), axis=0)
+y_RemainLungdata_1=np.delete(lungy_data,np.arange(b,c), axis=0)
+
+#fold 3: F5 and F6 mice 
+d=3202
+
+RawTestMouse_2=lungdata[c:d]
+y_TestMouse_2=lungy_data[c:d]
+
+RemainLungdata_2=np.delete(lungdata,np.arange(c,d), axis=0)
+y_RemainLungdata_2=np.delete(lungy_data,np.arange(c,d), axis=0)
+
+#fold 4: F9, F12 and F2 mice
+e=4740
+
+RawTestMouse_3=lungdata[d:e]
+y_TestMouse_3=lungy_data[d:e]
+
+RemainLungdata_3=np.delete(lungdata,np.arange(d,e), axis=0)
+y_RemainLungdata_3=np.delete(lungy_data,np.arange(d,e), axis=0)
+
+#fold 5: F10, F13 and F20 mice
+f=6264
+
+RawTestMouse_4=lungdata[e:f]
+y_TestMouse_4=lungy_data[e:f]
+
+RemainLungdata_4=np.delete(lungdata,np.arange(e,f), axis=0)
+y_RemainLungdata_4=np.delete(lungy_data,np.arange(e,f), axis=0)
+
+
+#random number generator
+seedy=150000 
+np.random.seed(seedy)
+tf.random.set_seed(seedy)
+
+#arrays to save results from k-fold cross-validation loop
+Foldstrainidx = []
+Foldstestidx = []
+
+RawTestsets=[]
+yTargetTestsets=[]
+yPredTestsets=[]
+FoldavgtestMAE=[]
+
+RawTrainsets=[]
+yTargetTrainsets=[]
+
+
+
+#############Assign cell spectra to one of 5 test-fold using the kfold function to split the data ###############
+# Define the K-fold Cross Validation loop
+kfold = KFold(n_splits=5, shuffle=True, random_state=seedy)
+
+for i, (train_index, test_index) in enumerate(kfold.split(celldata,celly_data)):
+    print(f"Fold {i+1}:")
+    Foldstrainidx.append(train_index)
+    Foldstestidx.append(test_index)
+    
+    X_traincells, X_testcells = celldata.iloc[train_index], celldata.iloc[test_index]
+    Y_traincells, Y_testcells = celly_data.iloc[train_index], celly_data.iloc[test_index]
+   
+    x_traincells = np.expand_dims(X_traincells, -1)
+    x_testcells = np.expand_dims(X_testcells, -1)
+
+    y_traincells = np.expand_dims(Y_traincells, -1)
+    y_testcells = np.expand_dims(Y_testcells, -1)
+   
+    
+    #Concatenate train and test lung and cell data to form final train and test fold-sets 
+
+    x_train = np.vstack((x_traincells,eval('RemainLungdata_' + str(i))))
+    y_train = np.vstack((y_traincells,eval('y_RemainLungdata_' + str(i))))
+
+    x_test = np.vstack((x_testcells,eval('RawTestMouse_' + str(i))))
+    y_test = np.vstack((y_testcells,eval('y_TestMouse_' + str(i))))
+
+    RawTestsets.append(x_test)
+    yTargetTestsets.append(y_test)
+    
+    RawTrainsets.append(x_train)
+    yTargetTrainsets.append(y_train) 
+   
+   #Model architecture 
+    from tensorflow.keras import layers
+    kersize=10
+    
+    model = keras.Sequential(
+        [
+            layers.Input(shape=(x_train.shape[1],x_train.shape[2])), #size would be 582 x 1
+            layers.Conv1D(
+                filters=16, kernel_size=kersize, strides=2,padding="same",activation="relu"
+            ),   
+            layers.Conv1D(
+                filters=32, kernel_size=kersize, strides=3,padding="same",activation="relu"
+            ),
+            layers.Conv1D(
+                filters=64, kernel_size=kersize, strides=3,padding="valid",activation="relu"
+            ),
+            layers.Conv1DTranspose(
+                filters=64, kernel_size=kersize, strides=3,padding="valid",activation="relu"
+            ),
+            layers.Conv1DTranspose(
+                filters=32, kernel_size=kersize, strides=3,padding="same",activation="relu"
+            ),
+            layers.Conv1DTranspose(
+                filters=16, kernel_size=kersize, strides=2,padding="same",activation="relu"
+            ),
+            layers.Conv1DTranspose(filters=1, kernel_size=kersize,padding="same"),
+        ]
+    )
+
+
+    model.compile(optimizer=keras.optimizers.Adam(learning_rate=0.001,beta_1=0.9,beta_2=0.999,epsilon=1e-08,amsgrad=True), loss="mse") 
+    model.summary()
+  
+    history = model.fit(x_train,y_train,epochs=450,batch_size=30,validation_split=0.10,callbacks=[keras.callbacks.EarlyStopping(monitor="val_loss", patience=5, mode="min",restore_best_weights=True)]) 
+
+    #plot MSE training loss as function of epochs to check training progress
+    plt.plot(history.history['loss'])
+    plt.plot(history.history['val_loss'])
+    plt.title('training progress')
+    plt.ylabel('loss')
+    plt.xlabel('epoch')
+    plt.legend(['Train', 'Validation'], loc='upper left')
+    plt.show()
+
+    #Plot model if desired
+    #plot_model(model, show_shapes=True, show_layer_names=True)
+
+    #y_train_pred: Autoencoder-preprocessed train spectra
+    y_train_pred = model.predict(x_train)
+
+    #Evaluating Train mean absolute error
+    train_mae_loss = np.mean(np.abs(y_train_pred - y_train), axis=1)
+    meantrainMAE= np.mean(train_mae_loss)
+   
+    #y_test_pred: Autoencoder-preprocessed test-fold spectra
+    y_test_pred = model.predict(x_test)
+
+    #Evaluating Test mean absolute error
+    test_mae_loss = np.mean(np.abs(y_test_pred - y_test), axis=1)
+    meantestMAE= np.mean(test_mae_loss)
+    
+    print(meantestMAE)
+    yPredTestsets.append(y_test_pred)
+    FoldavgtestMAE.append(meantestMAE)
+
+   #Save trained model
+    model.save('AECellLungOct25fold' + str(i+1)+'.h5') 
+
+
+    #Plot sample results 
+    randomidx=0
+    plt.plot(x_test[randomidx])
+    plt.plot(y_test[randomidx])
+    plt.plot(y_test_pred[randomidx])
+    plt.legend(['x_test','y_test_target' ,'y_test_AEpred'], loc='upper left')
+    plt.show()
+    
+    
+#Saving test results for each test fold
+q=4
+
+RawTestFold=RawTestsets[q]
+y_TestFold=yTargetTestsets[q]
+y_TestFold_pred=yPredTestsets[q]
+idxTestfold=Foldstestidx[q]
+
+RawTestFold=np.reshape(RawTestFold, (RawTestFold.shape[0], RawTestFold.shape[1]))
+RawTestFold = pd.DataFrame (RawTestFold)
+
+y_TestFold=np.reshape(y_TestFold, (y_TestFold.shape[0], y_TestFold.shape[1]))
+y_TestFold = pd.DataFrame (y_TestFold)
+
+y_TestFold_pred=np.reshape(y_TestFold_pred, (y_TestFold_pred.shape[0],y_TestFold_pred.shape[1]))
+y_TestFold_pred = pd.DataFrame (y_TestFold_pred)
+
+
+with pd.ExcelWriter('AECellLungOct25fold' + str(q+1)+'.xlsx') as writer:  
+    RawTestFold.to_excel(writer, sheet_name='Xtest',index=False,header=False)
+    y_TestFold.to_excel(writer, sheet_name='YtestTarget',index=False,header=False)
+    y_TestFold_pred.to_excel(writer, sheet_name='YtestPred',index=False,header=False)
+    #idxTestfold.to_excel(writer, sheet_name='idxtestfold',index=False,header=False)
+   
