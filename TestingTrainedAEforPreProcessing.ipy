@@ -1,0 +1,57 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Sat Oct  4 16:01:33 2025
+
+@author: Alejandra
+"""
+
+import tensorflow as tf
+from tensorflow import keras
+from keras.models import Sequential
+from keras.models import Model
+from keras.layers import Dense, Dropout, Flatten, Normalization, Conv1D, InputLayer, BatchNormalization
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from numpy import mean,std
+from sklearn.metrics import confusion_matrix
+from keras.utils.vis_utils import plot_model
+from sklearn.model_selection import KFold
+from keras.models import load_model
+
+
+#Load trained pre-processing AE (correct for background, noise and CR)
+model = load_model('AEProsBiopsy13Oct25pat20Fold4.h5')
+model.summary()
+
+plot_model(model, show_shapes=True, show_layer_names=True)
+
+
+#Load data set to evaluate/pre-process
+#Raw data 
+Raw_data = pd.read_excel(r'C:\Users\Alejandra\OneDrive - UBC\Documents\Architecture tuning\AEpaperRound2Sept2025\12409ProstSpectraCompletesetCR3.xlsx',header=None,sheet_name='RawCRz582')   
+#If testing model against target (not necessary)
+y_data_target = pd.read_excel(r'C:\Users\Alejandra\OneDrive - UBC\Documents\Architecture tuning\AEpaperRound2Sept2025\12409ProstSpectraCompletesetCR3.xlsx',header=None,sheet_name='BLsmoothz582')  
+
+
+# Convert the 2D spectra matrix  to 3D array so that input is acceptable to the CNN. 
+#From (num of spectra) x (num of points) matrix to a (num of spectra) x (num of points) x (1)
+Raw_data = np.expand_dims(Raw_data, -1)
+y_data_target = np.expand_dims(y_data_target, -1)
+
+
+#Use model.predict to pre-process raw data using the trained AE model
+AEPreProcess_Result = model.predict(Raw_data)
+
+#Evaluate AE pre-processing accuracy with target
+test_mae_loss = np.mean(np.abs(y_data_target - AEPreProcess_Result), axis=1)
+meantestMAE= np.mean(test_mae_loss)
+
+#Plot sample results
+randomidx=500
+plt.plot(Raw_data[randomidx])
+plt.plot(y_data_target[randomidx])
+plt.plot(AEPreProcess_Result[randomidx])
+#plt.legend(['Raw_data','AEPreProcess_Result'], loc='upper left')
+plt.legend(['Raw_data','y_data_target' ,'AEPreProcess_Result'], loc='upper left')
+plt.show()
