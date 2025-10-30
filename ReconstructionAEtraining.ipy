@@ -1,0 +1,127 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Apr  9 12:29:26 2025
+
+@author: Alejandra
+"""
+
+import tensorflow as tf
+from tensorflow import keras
+from keras.models import Sequential
+from keras.models import Model
+from keras.layers import Dense, Dropout, Flatten, Normalization, Conv1D, InputLayer, BatchNormalization
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from numpy import mean,std
+from sklearn.metrics import confusion_matrix
+from keras.utils.vis_utils import plot_model
+
+#Load good pre-processed spectra 
+#As it is a reconstruction autoencoder Input = Target Output
+data = pd.read_csv(r'C:\Users\Alejandra\OneDrive - UBC\Documents\Architecture tuning\AEpapercorrections\Q2subjectwise-PCBiopsy\YtestPredAEPCsubjectwiseAllFolds11Mar25zscoreCNN.csv',header=None)   
+
+
+# Convert the 2D spectra matrix  to 3D array so that input is acceptable to the CNN. 
+#From (num of spectra) x (num of points) matrix to a (num of spectra) x (num of points) x (1)
+data = np.expand_dims(data, -1)
+
+
+#Random number generator: set seed for reproducible results
+seedy=180000 
+np.random.seed(seedy)
+tf.random.set_seed(seedy) 
+
+#Splitting data into training and testing sets
+from sklearn.model_selection import train_test_split
+x_train, x_test = train_test_split(data, test_size=0.20,random_state=seedy)
+
+
+from tensorflow.keras import layers
+kersize=10
+
+model = keras.Sequential(
+    [
+        layers.Input(shape=(x_train.shape[1],x_train.shape[2])), #size would be 582 x 1
+        layers.Conv1D(
+            filters=16, kernel_size=kersize, strides=2,padding="same",activation="relu"
+        ),   
+        layers.Conv1D(
+            filters=32, kernel_size=kersize, strides=3,padding="same",activation="relu"
+        ),
+        layers.Conv1D(
+            filters=64, kernel_size=kersize, strides=3,padding="valid",activation="relu"
+        ),
+        layers.Conv1DTranspose(
+            filters=64, kernel_size=kersize, strides=3,padding="valid",activation="relu"
+        ),
+        layers.Conv1DTranspose(
+            filters=32, kernel_size=kersize, strides=3,padding="same",activation="relu"
+        ),
+        layers.Conv1DTranspose(
+            filters=16, kernel_size=kersize, strides=2,padding="same",activation="relu"
+        ),
+        layers.Conv1DTranspose(filters=1, kernel_size=kersize,padding="same"),
+    ]
+)
+model.compile(optimizer=keras.optimizers.Adam(learning_rate=0.001,beta_1=0.9,beta_2=0.999,epsilon=1e-08,amsgrad=True), loss="mse") 
+model.summary()
+
+history = model.fit(x_train,x_train,epochs=450,batch_size=30,validation_split=0.10,callbacks=[keras.callbacks.EarlyStopping(monitor="val_loss", patience=5, mode="min",restore_best_weights=True)]) 
+
+
+#plot MSE training loss as function of epochs to check training progress
+plt.plot(history.history['loss'])
+plt.plot(history.history['val_loss'])
+plt.title('training progress')
+plt.ylabel('loss')
+plt.xlabel('epoch')
+plt.legend(['Train', 'Validation'], loc='upper left')
+plt.show()
+
+
+#Plot model if desired
+#plot_model(model, show_shapes=True, show_layer_names=True)
+
+#Reconstructing training spectra
+y_train_pred = model.predict(x_train)
+
+#Reconstruction loss on training set
+train_mae_loss = np.mean(np.abs(y_train_pred - x_train), axis=1)
+meantrainMAE= np.mean(train_mae_loss)
+maxtrainMAE= np.max(train_mae_loss)
+threshold=maxtrainMAE
+
+#Reconstructing testing spectra
+y_test_pred = model.predict(x_test)
+
+#Reconstruction loss on testing set
+test_mae_loss = np.mean(np.abs(y_test_pred - x_test), axis=1)
+meantestMAE= np.mean(test_mae_loss)
+maxtestMAE= np.max(test_mae_loss)  #used to establish an anomaly threshold
+
+#Plot sample results
+randomidx=1500
+plt.plot(x_test[randomidx])
+plt.plot(y_test_pred[randomidx])
+plt.legend(['x_test', 'y_test_pred'], loc='upper left')
+plt.show()
+
+
+x_test=np.reshape(x_test, (x_test.shape[0], x_test.shape[1]))
+x_test = pd.DataFrame (x_test)
+y_test_pred=np.reshape(y_test_pred, (y_test_pred.shape[0], y_test_pred.shape[1]))
+y_test_pred = pd.DataFrame (y_test_pred)
+
+
+#Save reconstruction AE for outlier detection
+model.save("ReconstructAEoct2025.h5")
+
+
+#Save reconstructed spectra on spreadsheet
+with pd.ExcelWriter('ReconstructAEoct2025.xlsx') as writer:  
+    x_test.to_excel(writer, sheet_name='Xtest',index=False,header=False)
+    y_test_pred.to_excel(writer, sheet_name='YtestPred',index=False,header=False)
+
+
+
