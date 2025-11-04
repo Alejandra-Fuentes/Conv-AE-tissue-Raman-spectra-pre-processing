@@ -1,0 +1,111 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Sat Oct  4 17:00:09 2025
+
+@author: Alejandra
+"""
+
+import tensorflow as tf
+from tensorflow import keras
+from keras.models import Sequential
+from keras.models import Model
+from keras.layers import Dense, Dropout, Flatten, Normalization, Conv1D, InputLayer, BatchNormalization
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from numpy import mean,std
+from sklearn.metrics import confusion_matrix
+from keras.utils.vis_utils import plot_model
+from sklearn.model_selection import KFold
+from keras.models import load_model
+
+#Load raw data for reference
+Raw_data = pd.read_excel(r'C:\Users\Alejandra\OneDrive - UBC\Documents\Architecture tuning\AEpapercorrections\Q12anomalydetector\777secondtestsetprostdata.xlsx',header=None,sheet_name='Rawz582')
+#AE-Pre-processed data (Average of 5 fitted AE models from 5-fold training and validation loop)
+AEPreProcess_Result = pd.read_excel(r'C:\Users\Alejandra\OneDrive - UBC\Documents\Architecture tuning\AEpapercorrections\Q12anomalydetector\777secondtestsetPCytestpreds.xlsx',header=None,sheet_name='znormAVGytestpred')   
+
+
+
+# Convert the 2D spectra matrix  to 3D array so that input is acceptable to the CNN. 
+#From (num of spectra) x (num of points) matrix to a (num of spectra) x (num of points) x (1)
+Raw_data=np.expand_dims(Raw_data,-1)
+AEPreProcess_Result=np.expand_dims(AEPreProcess_Result,-1)
+
+
+#Plot sample results
+randomidx=35
+plt.plot(Raw_data[randomidx])
+plt.plot(AEPreProcess_Result[randomidx])
+plt.legend(['Raw_data','AEPreProcess_Result'], loc='upper left')
+plt.show()
+
+
+
+#Load reconstruction AE (Pre-processed input reconstructed on Output)
+ReconstrAE = load_model('AnomalyDetectAEPCBiop10Apr25znorm-3.h5')
+ReconstrAE.summary()
+
+
+#Obtain reconstructed spectra and obtain reconstruction error to determine whether spectra are outliers
+ReconstrSpectra = ReconstrAE.predict(AEPreProcess_Result)
+ReconstrError = np.mean(np.abs(ReconstrSpectra  - AEPreProcess_Result), axis=1)
+
+
+
+#Determining outlier measurements on the data ser using reconstruction AE 
+#Maximum reconstruction loss from training reconstruction AE  0.017992127995273187   0.017992127995273187
+maxtrainMAE=0.017992127995273187  
+
+
+#User-set reconstruction error thresholds are a percentile of the training loss
+
+#"Hard" outliers: Automatically removed from the data set 
+weight1=0.60
+Threshold1=weight1*maxtrainMAE
+
+#Hard outliers -threshold1
+HardOutliers=ReconstrError>Threshold1
+print("Number of hard outliers: ", np.sum(HardOutliers))
+print("Indices of hard outliers: ", np.where(HardOutliers))
+
+
+#Threshold 2 flags potential outliers in addition to outliers from thrs1
+#Flagged spectra on thrs 2 to be revised manually
+weight2=0.85
+
+#Identify measurements between Thrs1 and Thrs2 as potential outliers
+def count_values_between(numbers, a, b):
+    count = 0
+    for num in numbers:
+        if a < num < b:
+            count += 1
+    return count
+
+def indices_of_values_between(numbers, a, b):
+    indices = []
+    for i, num in enumerate(numbers):
+        if a < num < b:
+            indices.append(i)
+    return indices
+
+# Example usage:
+numbers = ReconstrError
+a = Threshold1*weight2
+b = Threshold1
+result = count_values_between(numbers, a, b)
+result_indices = indices_of_values_between(numbers, a, b)
+print("Number of potential outliers (between thrs1 and thrs2): {}".format(result))
+print("Indices of potential outliers: {}".format(result_indices))
+
+
+#enter indices of manually-identified outliers in this subset
+input_str = input("Enter selected additional outliers: ")
+
+elements = input_str.split()
+selected = np.array([int(elem) for elem in elements])
+
+
+#Delete outlier spectra from the data set
+GoodSpectra = np.delete(AEPreProcess_Result, np.concatenate((np.where(HardOutliers)[0],selected)), axis=0)
+
+
