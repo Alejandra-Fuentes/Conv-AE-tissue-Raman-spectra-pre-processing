@@ -1,0 +1,298 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Mar 31 12:30:55 2025
+
+@author: Alejandra
+"""
+
+import tensorflow as tf
+from tensorflow import keras
+from keras.models import Sequential
+from keras.models import Model
+from keras.layers import Dense, Dropout, Flatten, Normalization, Conv1D, InputLayer, BatchNormalization, ReLU
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from numpy import mean,std
+from sklearn.metrics import confusion_matrix
+from keras.utils.vis_utils import plot_model
+from sklearn.model_selection import KFold
+from sklearn.preprocessing import LabelEncoder,MinMaxScaler
+
+
+#Raman spectra data set to classify (Data) and labels (y_data)
+data = pd.read_csv(r'C:\Users\Alejandra\OneDrive - UBC\Documents\Architecture tuning\AEpapercorrections\Q2subjectwise-CellLung\YtestPredAECellLungAllFolds13Mar25zscoreCNN.csv',header=None)
+y_data = pd.read_excel(r'C:\Users\Alejandra\OneDrive - UBC\Documents\Architecture tuning\AEpapercorrections\Q2subjectwise-CellLung\ClasstestfoldAECellLungAllFolds13Mar25.xlsx',header=None)  
+
+# Convert the 2D spectra matrix  to 3D array so that input is acceptable to the CNN. 
+#From (num of spectra) x (num of points) matrix to a (num of spectra) x (num of points) x (1)
+data = np.expand_dims(data, -1) 
+
+#convert labels/classes to categorical variables for classification
+le = LabelEncoder()
+le.fit(y_data)
+classes = le.classes_
+print(le.classes_)
+num_classes = len(classes)
+y_data_raw = np.copy(y_data)
+y_data = le.transform(y_data_raw)
+y_data = tf.keras.utils.to_categorical(y_data)
+
+
+#############Define the k-fold test set (split at cell and mouse level) ##########################################
+#range of test fold within the whole data set spreadsheet
+a=8676
+b=11184
+
+#Test set (test fold set)
+TestFoldData=data[a:b]
+y_TestFoldData=y_data[a:b]
+
+#Train set (train classifier with remaining data) 
+RemainTrainData=np.delete(data,np.arange(a,b), axis=0)
+y_RemainTrainData=np.delete(y_data,np.arange(a,b), axis=0)
+
+
+#############Split the remaining data into training and validation sets for CNN model fitting ###############
+seedy=130000 
+np.random.seed(seedy)
+tf.random.set_seed(seedy)
+
+from sklearn.model_selection import train_test_split
+X_train, X_validation, y_train, y_validation = train_test_split(RemainTrainData, y_RemainTrainData, test_size=0.12)
+
+#Define the CNN architecture and fit model
+numfiltersly1=32
+filtersizely1=8
+numfiltersly2=64
+filtersizely2=filtersizely1
+DropRatio=0.2 
+minibatchsize=50 
+
+model=keras.models.Sequential()
+model.add(Conv1D(filters=numfiltersly1, kernel_size=filtersizely1,strides=2,dilation_rate=1,use_bias=False,activation=None,input_shape=(582,1),padding='same',data_format='channels_last'))
+model.add(BatchNormalization())
+model.add(ReLU())
+model.add(Conv1D(filters=numfiltersly2, kernel_size=filtersizely2,strides=3,dilation_rate=1,use_bias=False,activation=None,padding='same')) 
+model.add(BatchNormalization())
+model.add(ReLU())
+model.add(keras.layers.Flatten())
+model.add(Dropout(DropRatio))
+model.add(keras.layers.Dense(num_classes,use_bias=True,activation='softmax'))
+opt = keras.optimizers.Adam(learning_rate=0.0001,beta_1=0.9,beta_2=0.999,epsilon=1e-08,amsgrad=True)
+model.compile(optimizer=opt,loss='categorical_crossentropy',metrics=['accuracy'])
+model.summary() 
+history = model.fit(X_train,y_train,batch_size=minibatchsize,epochs=15,validation_data=(X_validation,y_validation)) 
+
+
+#Plot model if desired
+#plot_model(model, to_file='CNN_GradCAM5sampletypesAEFold5b.png', show_shapes=True, show_layer_names=True)
+
+
+#plot MSE training loss as function of epochs to check training progress
+print(history.history.keys())
+plt.plot(history.history['accuracy'])
+plt.plot(history.history['val_accuracy'])
+plt.title('model accuracy')
+plt.ylabel('accuracy')
+plt.xlabel('epoch')
+plt.legend(['Train', 'Validation'], loc='upper left')
+plt.show()
+
+
+#Test classification CNN model 
+#Calculate train, validation and test accuracies
+
+#Validation accuracy check
+val_loss,val_accuracy=model.evaluate(X_validation,y_validation)
+
+
+#Test Accuracy and Confusion Matrix 
+test_loss,test_accuracy=model.evaluate(TestFoldData,y_TestFoldData)
+Testclassscore=model.predict(TestFoldData)
+
+#test confusion matrix 
+y_prediction = model.predict(TestFoldData)
+y_prediction = np.argmax (y_prediction, axis = 1)
+Y_test=np.argmax(y_TestFoldData, axis=1)
+result = confusion_matrix(Y_test, y_prediction,normalize='true') 
+print(result)
+
+
+#Define GradCaM function for CNN explainability: Identify class-discriminative spectral bands 
+def relu(x):
+    return(np.maximum(0, x))
+
+
+def grad_cam(layer_name, data, model):
+    
+    grad_model = tf.keras.models.Model([model.inputs], [model.get_layer(layer_name).output, model.output])
+    
+    last_conv_layer_output, preds = grad_model(data)
+
+    with tf.GradientTape() as tape:
+        last_conv_layer_output, preds = grad_model(data)
+        #print(last_conv_layer_output.shape)
+        #print(preds.shape) 
+        #print(preds) 
+        pred_index = tf.argmax(preds[0])
+        class_channel = preds[:, pred_index]
+        #print(pred_index)
+        #print(class_channel)
+    
+    grads = tape.gradient(class_channel, last_conv_layer_output)
+    #print(grads.shape)
+    last_conv_layer_output = last_conv_layer_output[0]
+    #print(last_conv_layer_output.shape)
+    pooled_grads = tf.reduce_mean(grads, axis=(0))
+    #print(pooled_grads.shape)#use print to see intermediate outputs
+    heatmap = np.multiply(last_conv_layer_output,pooled_grads)
+    #print(heatmap.shape)
+    heatmap = tf.reduce_mean(heatmap, axis=(1))
+    #print(heatmap.shape)
+    heatmap =relu(np.expand_dims(heatmap,0))
+    #print(heatmap.shape)
+    #For visualization purpose, we will also normalize the heatmap between 0 & 1
+    heatmap=(heatmap - np.min(heatmap)) / (np.max(heatmap) - np.min(heatmap))  
+    #print(heatmap.shape)
+    return heatmap
+  
+
+
+#remove softmax layer from CNN as usually done in grad-cam formulation
+model.layers[-1].activation = None
+
+
+#range of each category within the test fold set
+upperh460=252
+
+uppermcf7=534
+
+upperlncap=788
+
+uppermb231=984
+
+upperlung=2508
+
+
+
+###Average Grad-CAM maps for each category###
+extentlow=-1.5 
+extentup=5   
+
+
+######H460
+h460=TestFoldData[0:upperh460]
+avgh460=mean(h460,axis=0)
+
+H460maps=[]
+for i in range(0,upperh460):            
+ H460maps.append(grad_cam("re_lu_1", np.expand_dims(TestFoldData[i],axis=0), model))
+
+H460maps=np.reshape(H460maps, (upperh460, H460maps[0].size))   
+avgH460map=sum(H460maps)/upperh460
+avgH460map=np.reshape(avgH460map, (1, H460maps[0].size)) 
+
+plt.imshow(avgH460map, cmap='jet', aspect="auto", interpolation='bilinear',extent=[0,582,extentlow,extentup],
+       vmin=avgH460map.min(), vmax=avgH460map.max(), alpha=1.0)
+plt.plot(avgh460,'k')
+plt.title('Avg GradCAM of H460 cells')
+plt.show()    
+  
+
+######MCF7
+mcf7=TestFoldData[upperh460:uppermcf7]
+avgmcf7=mean(mcf7,axis=0)
+
+mcf7maps=[]
+for i in range(upperh460,uppermcf7):            
+  mcf7maps.append(grad_cam("re_lu_1", np.expand_dims(TestFoldData[i],axis=0), model))
+
+mcf7maps=np.reshape(mcf7maps, ((uppermcf7-upperh460), mcf7maps[0].size))   
+avgmcf7map=sum(mcf7maps)/(uppermcf7-upperh460)
+avgmcf7map=np.reshape(avgmcf7map, (1, mcf7maps[0].size)) 
+
+plt.imshow(avgmcf7map, cmap='jet', aspect="auto", interpolation='bilinear',extent=[0,582,extentlow,extentup],
+        vmin=avgmcf7map.min(), vmax=avgmcf7map.max(), alpha=1.0)
+plt.plot(avgmcf7,'k')
+plt.title('Avg GradCAM of MCF7 cells')
+plt.show()
+
+
+######LNCAP
+lncap=TestFoldData[uppermcf7:upperlncap]
+avglncap=mean(lncap,axis=0)
+
+lncapmaps=[]
+for i in range(uppermcf7,upperlncap):           
+ lncapmaps.append(grad_cam("re_lu_1", np.expand_dims(TestFoldData[i],axis=0), model))
+
+lncapmaps=np.reshape(lncapmaps, ((upperlncap-uppermcf7), lncapmaps[0].size))   
+avglncapmap=sum(lncapmaps)/(upperlncap-uppermcf7)
+avglncapmap=np.reshape(avglncapmap, (1, lncapmaps[0].size)) 
+
+plt.imshow(avglncapmap, cmap='jet', aspect="auto", interpolation='bilinear',extent=[0,582,extentlow,extentup],
+       vmin=avglncapmap.min(), vmax=avglncapmap.max(), alpha=1.0)
+plt.plot(avglncap,'k')
+plt.title('Avg GradCAM of LNCaP cells')
+plt.show()
+    
+
+######MB231
+mb231=TestFoldData[upperlncap:uppermb231]
+avgmb231=mean(mb231,axis=0)
+
+mb231maps=[]
+for i in range(upperlncap,uppermb231):           
+  mb231maps.append(grad_cam("re_lu_1", np.expand_dims(TestFoldData[i],axis=0), model))
+
+mb231maps=np.reshape(mb231maps, ((uppermb231-upperlncap), mb231maps[0].size))   
+avgmb231map=sum(mb231maps)/(uppermb231-upperlncap)
+avgmb231map=np.reshape(avgmb231map, (1, mb231maps[0].size)) 
+
+plt.imshow(avgmb231map, cmap='jet', aspect="auto", interpolation='bilinear',extent=[0,582,extentlow,extentup],
+        vmin=avgmb231map.min(), vmax=avgmb231map.max(), alpha=1.0)
+plt.plot(avgmb231,'k')
+plt.title('Avg GradCAM of MDAMB231 cells')
+plt.show()   
+  
+
+######LUNGTISSUE
+lung=TestFoldData[uppermb231:upperlung]
+avglung=mean(lung,axis=0)
+
+lungmaps=[]
+for i in range(uppermb231,upperlung):          
+  lungmaps.append(grad_cam("re_lu_1", np.expand_dims(TestFoldData[i],axis=0), model))
+
+lungmaps=np.reshape(lungmaps, ((upperlung-uppermb231), lungmaps[0].size))   
+avglungmap=sum(lungmaps)/(upperlung-uppermb231) 
+avglungmap=np.reshape(avglungmap, (1, lungmaps[0].size)) 
+
+plt.imshow(avglungmap, cmap='jet', aspect="auto", interpolation='bilinear',extent=[0,582,extentlow,extentup],
+        vmin=avglungmap.min(), vmax=avglungmap.max(), alpha=1.0)
+plt.plot(avglung,'k')
+plt.title('Avg GradCAM of mouse lung tissue')
+plt.show()    
+
+
+#Save trained CNN model
+#model.save('Q11CNNgradCAMXtestfold5.h5')
+
+
+#Save GradCAM results and confusion matrix
+Mbig=np.concatenate((H460maps,mcf7maps,lncapmaps,mb231maps,lungmaps), axis=0)
+Mbig = pd.DataFrame (Mbig)
+Mbig.to_excel("AllGradCAMsXtestfold5.xlsx", index=False,header=False)
+
+Allavgmaps=np.concatenate((avgH460map,avgmcf7map,avglncapmap,avgmb231map,avglungmap),axis=0)
+Allavgmaps = pd.DataFrame (Allavgmaps)
+Allavgmaps.to_excel("AvgGradCAMsXtestfold5doubcheck.xlsx", index=False,header=False)
+
+ConfMax=np.reshape(result,(5,5))
+ConfMax = pd.DataFrame (ConfMax)
+ConfMax.to_excel("ConfMatrixXtestfold5.xlsx", index=False,header=False)
+
+test_acc=pd.DataFrame(np.array([test_accuracy,test_loss]))
+test_acc.to_excel("TestAccXtestfold5.xlsx", index=False,header=False)
+
